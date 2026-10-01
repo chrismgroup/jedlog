@@ -25,16 +25,28 @@ async function migrate() {
 
   const { ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME, ADMIN_PHONE } = process.env;
   if (ADMIN_EMAIL && ADMIN_PASSWORD) {
-    const existing = await pool.query("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1");
-    if (existing.rowCount === 0) {
       assertStrongPassword(ADMIN_PASSWORD);
+    const email = ADMIN_EMAIL.toLowerCase().trim();
+    const existing = await pool.query('SELECT id, role FROM users WHERE email = $1', [email]);
+    if (existing.rows[0] && existing.rows[0].role !== 'admin') {
+      throw new Error('ADMIN_EMAIL is already assigned to a non-admin account');
+    }
+    if (existing.rows[0] && process.env.ADMIN_RESET_PASSWORD === 'true') {
+      const hash = await argon2.hash(ADMIN_PASSWORD, { type: argon2.argon2id });
+      await pool.query(
+        `UPDATE users SET full_name = $2, phone = $3, password_hash = $4, active = TRUE,
+         failed_logins = 0, locked_until = NULL WHERE id = $1`,
+        [existing.rows[0].id, ADMIN_NAME || 'Administrator', ADMIN_PHONE || 'N/A', hash],
+      );
+      console.log(`Bootstrap admin credentials updated: ${email}`);
+    } else if (!existing.rows[0]) {
       const hash = await argon2.hash(ADMIN_PASSWORD, { type: argon2.argon2id });
       await pool.query(
         `INSERT INTO users (full_name, email, phone, password_hash, role)
          VALUES ($1, $2, $3, $4, 'admin')`,
-        [ADMIN_NAME || 'Administrator', ADMIN_EMAIL.toLowerCase().trim(), ADMIN_PHONE || 'N/A', hash],
+        [ADMIN_NAME || 'Administrator', email, ADMIN_PHONE || 'N/A', hash],
       );
-      console.log(`Bootstrap admin created: ${ADMIN_EMAIL}`);
+      console.log(`Bootstrap admin created: ${email}`);
     }
   }
 }
